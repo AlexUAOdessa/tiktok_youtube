@@ -3,6 +3,9 @@
 #
 # Binaries for programs and plugins
 *.exe
+# Но включить yt-dlp.exe
+!yt-dlp.exe
+
 *.exe~
 *.dll
 *.so

@@ -1,0 +1,120 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// downloadVideo скачивает видео по указанному URL в заданную папку.
+func downloadVideo(url, folderName, dateAfter string) {
+	outputTemplate := fmt.Sprintf("%s/%%(title)s.%%(ext)s", folderName)
+	args := []string{"--limit-rate", "7M", "-f", "bestvideo+bestaudio/best"}
+	if dateAfter != "" {
+		args = append(args, "--dateafter="+dateAfter)
+	}
+	args = append(args, "-o", outputTemplate, url)
+	
+	cmd := exec.Command("D:\\tiktok_youtube\\yt-dlp.exe", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("Ошибка при скачивании %s: %v\n", url, err)
+	}
+}
+
+func main() {
+	reader := bufio.NewReader(os.Stdin)
+
+	// Ввод URL канала
+	fmt.Print("Введите URL канала: ")
+	channelURL, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Ошибка чтения: %v\n", err)
+		return
+	}
+	channelURL = strings.TrimSpace(channelURL)
+
+	// Извлекаем имя канала для папки
+	re := regexp.MustCompile(`@([A-Za-z0-9_-]+)`)
+	matches := re.FindStringSubmatch(channelURL)
+	if len(matches) < 2 {
+		fmt.Println("Не удалось извлечь имя канала из URL.")
+		return
+	}
+	folderName := matches[1]
+	fmt.Printf("Будет создана папка: %s\n", folderName)
+
+	// Создаем папку, если она не существует
+	if err := os.MkdirAll(folderName, os.ModePerm); err != nil {
+		fmt.Printf("Ошибка при создании папки %s: %v\n", folderName, err)
+		return
+	}
+
+	// Ввод периода закачки
+	fmt.Print("Введите период закачки (0 - все видео, число - за последние N дней): ")
+	periodStr, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Printf("Ошибка ввода: %v\n", err)
+		return
+	}
+	periodStr = strings.TrimSpace(periodStr)
+
+	var dateAfter string
+	if periodStr != "0" {
+		// Если введено число, вычисляем дату N дней назад
+		days, err := strconv.Atoi(periodStr)
+		if err != nil || days < 0 {
+			fmt.Println("Некорректное число дней.")
+			return
+		}
+		dateAfter = time.Now().AddDate(0, 0, -days).Format("20060102")
+		fmt.Printf("Будут скачаны видео, загруженные после %s\n", dateAfter)
+	}
+
+	// Формируем команду yt-dlp для получения списка видео
+	args := []string{"--flat-playlist", "--print", "url", "--no-cache-dir"}
+	if dateAfter != "" {
+		args = append(args, "--dateafter="+dateAfter)
+	}
+	args = append(args, channelURL)
+
+	cmd := exec.Command("D:\\tiktok_youtube\\yt-dlp.exe", args...)
+	output, err := cmd.Output()
+	if err != nil {
+		fmt.Printf("Ошибка при получении списка видео: %v\n", err)
+		return
+	}
+
+	// Разбиваем вывод на строки и формируем список URL
+	lines := strings.Split(string(output), "\n")
+	var urls []string
+	for _, line := range lines {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			urls = append(urls, trimmed)
+		}
+	}
+
+	if len(urls) == 0 {
+		fmt.Println("Видео не найдены.")
+		return
+	}
+
+	fmt.Printf("Найдено %d видео. Начинается скачивание...\n", len(urls))
+	for _, url := range urls {
+		downloadVideo(url, folderName, dateAfter)
+	}
+
+	fmt.Println("Скачивание завершено.")
+}
+
+https://youtube.com/@animatters.official?si=oU727o7kItp0lNOV
+
+ go build -ldflags="-s -w" main.go
+
+https://youtube.com/@haneditx?si=2wNpdvO3r3lQ9K0L
