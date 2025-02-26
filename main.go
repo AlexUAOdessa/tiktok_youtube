@@ -72,8 +72,11 @@ func downloadMedia(w fyne.Window, url, folderName, dateAfter, mediaType string, 
 			return
 		}
 
-		// Разделяем ссылки на видео
-		videoURLs := strings.Split(string(output), "\n")
+		// Преобразуем output (байтовый срез) в строку
+		outputStr := string(output)
+
+		// Разделяем строку на URL-адреса по символу новой строки
+		videoURLs := strings.Split(outputStr, "\n")
 
 		// Обновляем метку общего количества роликов
 		totalLabel.SetText(fmt.Sprintf("Общее количество: %d", len(videoURLs)))
@@ -158,7 +161,7 @@ func main() {
 
 	// Функция для создания радиогруппы выбора типа медиа
 	createMediaGroup := func(selected string) *widget.RadioGroup {
-		mediaGroup := widget.NewRadioGroup([]string{"Все", "Видео", "Аудио"}, nil)
+		mediaGroup := widget.NewRadioGroup([]string{"Видео", "Аудио"}, nil)
 		mediaGroup.Horizontal = true
 		mediaGroup.SetSelected(selected)
 		mediaGroup.OnChanged = func(value string) {
@@ -169,33 +172,40 @@ func main() {
 	}
 
 	// Создаем радиогруппу с начальным значением из конфигурации
-	mediaGroup := createMediaGroup(config.MediaType)
-
-	// Заголовок для выбора типа медиа
-	mediaLabel := widget.NewLabel("Выберите тип медиа:")
-
-	// Поле ввода даты (отображается только при выборе "Начальная дата")
-	dateEntry := widget.NewEntry()
-	dateEntry.SetPlaceHolder("YYYYMMDD")
-	dateEntry.Resize(fyne.NewSize(400, 30))
-
-	// Контейнер для поля ввода даты
-	dateContainer := container.NewVBox(dateEntry)
-
-	// Функция для создания радиогруппы выбора периода
-	createDateGroup := func(selected string, dateContainer *fyne.Container) *widget.RadioGroup {
-		dateGroup := widget.NewRadioGroup([]string{"Все ролики", "Начальная дата"}, func(value string) {
-			config.DateFilter = value
-			if value == "Начальная дата" {
-				dateContainer.Show()
-			} else {
-				dateContainer.Hide()
-			}
-			saveConfig()
-		})
-		dateGroup.SetSelected(selected)
-		return dateGroup
-	}
+    mediaGroup := createMediaGroup(config.MediaType)
+    
+    // Заголовок для выбора типа медиа
+    mediaLabel := widget.NewLabel("Выберите тип медиа:")
+    
+    // Поле ввода даты (отображается только при выборе "Начальная дата")
+    dateEntry := widget.NewEntry()
+    dateEntry.SetPlaceHolder("YYYYMMDD")
+    
+    // Контейнер для поля ввода даты, растягиваем на весь экран
+    dateContainer := container.NewVBox(dateEntry) // Используем VBox для растяжения
+    dateEntry.Resize(fyne.NewSize(w.Content().Size().Width, 30)) // Растягиваем на всю ширину окна
+    
+    // Добавление контейнера в окно
+    if config.DateFilter == "Начальная дата" {
+        dateContainer.Show()
+    } else {
+        dateContainer.Hide()
+    }
+    
+    // Функция для создания радиогруппы выбора периода
+    createDateGroup := func(selected string, dateContainer *fyne.Container) *widget.RadioGroup {
+        dateGroup := widget.NewRadioGroup([]string{"Все ролики", "Начальная дата"}, func(value string) {
+            config.DateFilter = value
+            if value == "Начальная дата" {
+                dateContainer.Show()
+            } else {
+                dateContainer.Hide()
+            }
+            saveConfig()
+        })
+        dateGroup.SetSelected(selected)
+        return dateGroup
+    }
 
 	// Создаем радиогруппу с начальным значением из конфигурации
 	dateGroup := createDateGroup(config.DateFilter, dateContainer)
