@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
-
 	"regexp"
+	"strings"
+	"syscall"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -15,137 +15,151 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Config структура для хранения настроек
+// Config структура для хранения настроек (тип медиа и фильтр даты)
 type Config struct {
-	MediaType    string   `yaml:"media_type"`
-	DateFilter   string   `yaml:"date_filter"`
+	MediaType  string `yaml:"media_type"`  // Тип медиа (Видео/Аудио)
+	DateFilter string `yaml:"date_filter"` // Фильтр даты (Все ролики или Начальная дата)
 }
 
-var config Config
+var config Config // Переменная для хранения конфигурации
 
-// Загружаем настройки из файла config.yaml, если он существует
+// loadConfig загружает настройки из файла config.yaml
 func loadConfig() {
+	// Чтение файла конфигурации
 	file, err := os.ReadFile("config.yaml")
 	if err != nil {
-		// Если файла нет, устанавливаем значения по умолчанию
-		config = Config{
-			MediaType:    "Видео",
-			DateFilter:   "Все ролики",
-		}
+		// Если файл не найден или ошибка, то создаем настройки по умолчанию
+		config = Config{MediaType: "Видео", DateFilter: "Все ролики"}
 		saveConfig()
 		return
 	}
+	// Если файл есть, десериализуем его в структуру config
 	yaml.Unmarshal(file, &config)
 }
 
-// Сохраняем текущие настройки в config.yaml
+// saveConfig сохраняет текущие настройки в файл config.yaml
 func saveConfig() {
+	// Сериализуем структуру в YAML
 	data, _ := yaml.Marshal(&config)
+	// Записываем данные в файл
 	os.WriteFile("config.yaml", data, 0644)
 }
 
-// Функция для скачивания видео и аудио
-func downloadMedia(url, folderName, dateAfter, mediaType string) {
-	// Создаем папки для видео и аудио
-	videoFolder := folderName + "/video"
-	audioFolder := folderName + "/audio"
-	namesFile := folderName + "/names.txt"
-	namesAudioFile := folderName + "/names_audio.txt"
-
-	// Создаем директории, если они не существуют
-	os.MkdirAll(videoFolder, os.ModePerm)
-	os.MkdirAll(audioFolder, os.ModePerm)
-
-	// Формируем путь для сохранения видео и аудио
-	videoOutputTemplate := fmt.Sprintf("%s/%%(title)s.%%(ext)s", videoFolder)
-	audioOutputTemplate := fmt.Sprintf("%s/%%(title)s.%%(ext)s", audioFolder)
-
-	// Основные аргументы для скачивания
-	args := []string{"--limit-rate", "7M", "-f", "bestvideo+bestaudio/best"}
-
-	// Если дата после не задана (или выбрано "Все ролики"), не добавляем параметр --dateafter
-	if dateAfter != "" && dateAfter != "Все ролики" {
-		// Проверяем, что дата имеет правильный формат
-		if len(dateAfter) != 8 || !isValidDate(dateAfter) {
-			fmt.Println("Ошибка: неверный формат даты. Ожидается YYYYMMDD.")
-			return
-		}
-		args = append(args, "--dateafter="+dateAfter)
-	}
-
-	// Если выбран "Видео" тип
-	if mediaType == "Видео" {
-		args = append(args, "-o", videoOutputTemplate, url)
-
-		// Выполняем команду скачивания видео
-		cmdVideo := exec.Command("./yt-dlp.exe", args...)
-		cmdVideo.Stdout = os.Stdout
-		cmdVideo.Stderr = os.Stderr
-		if err := cmdVideo.Run(); err != nil {
-			fmt.Printf("Ошибка при скачивании видео %s: %v\n", url, err)
-			return
-		}
-
-		// Переименовываем и записываем имена видео файлов в names.txt
-		renameAndSaveFiles(videoFolder, namesFile)
-	}
-
-	// Если выбран "Аудио" тип
-	if mediaType == "Аудио" {
-		args = append(args, "-x", "--audio-format", "mp3", "-o", audioOutputTemplate, url)
-
-		// Выполняем команду скачивания аудио
-		cmdAudio := exec.Command("./yt-dlp.exe", args...)
-		cmdAudio.Stdout = os.Stdout
-		cmdAudio.Stderr = os.Stderr
-		if err := cmdAudio.Run(); err != nil {
-			fmt.Printf("Ошибка при скачивании аудио %s: %v\n", url, err)
-			return
-		}
-
-		// Переименовываем и записываем имена аудио файлов в names_audio.txt
-		renameAndSaveFiles(audioFolder, namesAudioFile)
-	}
+// terminateProcesses завершает все процессы yt-dlp.exe
+func terminateProcesses() {
+	cmd := exec.Command("taskkill", "/F", "/IM", "yt-dlp.exe") // Команда для завершения процессов yt-dlp.exe
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}    // Скрыть окно при выполнении команды
+	cmd.Run()
 }
 
-// Функция для переименования файлов и записи их имен в файл
-func renameAndSaveFiles(folder string, namesFile string) {
-	files, err := os.ReadDir(folder)
-	if err != nil {
-		fmt.Printf("Ошибка при чтении папки: %v\n", err)
-		return
-	}
 
-	// Открываем файл для записи имен
-	namesFileHandle, err := os.Create(namesFile)
-	if err != nil {
-		fmt.Printf("Ошибка при создании файла: %v\n", err)
-		return
-	}
-	defer namesFileHandle.Close()
+// downloadMedia скачивает медиа файлы с канала по указанному URL
+func downloadMedia(w fyne.Window, url, folderName, dateAfter, mediaType string, currentNameLabel, totalLabel *widget.Label) {
+	go func() {
+		// Папки для хранения видео и аудио
+		videoFolder := folderName + "/video"
+		audioFolder := folderName + "/audio"
 
-	// Нумеруем файлы и записываем в файл
-	for i, file := range files {
-		if !file.IsDir() {
-			// Формируем новое имя файла
-			newFileName := fmt.Sprintf("%s_%d%s", strings.TrimSuffix(file.Name(), ".mp3"), i+1, ".mp3")
-			oldFilePath := folder + "/" + file.Name()
-			newFilePath := folder + "/" + newFileName
+		// Создаем папки для хранения файлов
+		os.MkdirAll(videoFolder, os.ModePerm)
+		os.MkdirAll(audioFolder, os.ModePerm)
 
-			// Переименовываем файл
-			err := os.Rename(oldFilePath, newFilePath)
+		// Настройки для команды yt-dlp
+		args := []string{"--flat-playlist", "--print", "url", "--no-cache-dir"} // Получаем список URL-ов видео
+		if dateAfter != "" && dateAfter != "Все ролики" {
+			// Если выбран фильтр по дате, проверяем корректность даты
+			if len(dateAfter) != 8 || !isValidDate(dateAfter) {
+				fmt.Println("Ошибка: неверный формат даты. Ожидается YYYYMMDD.")
+				return
+			}
+			// Добавляем фильтр по дате
+			args = append(args, "--dateafter="+dateAfter)
+		}
+
+		// Выполняем команду для получения списка URL-ов видео
+		cmdList := exec.Command("./yt-dlp.exe", append(args, url)...)
+		output, err := cmdList.CombinedOutput()
+		if err != nil {
+			// Если ошибка при получении списка видео, выводим ее
+			fmt.Printf("Ошибка при получении списка видео %s: %v\n", url, err)
+			return
+		}
+
+		// Разделяем результат выполнения команды на строки (URL-ы видео)
+		videoURLs := strings.Split(string(output), "\n")
+		totalLabel.SetText(fmt.Sprintf("Общее количество: %d", len(videoURLs)))
+
+		// Определяем папку для скачивания (в зависимости от типа медиа)
+		folder := videoFolder
+		if mediaType == "Аудио" {
+			folder = audioFolder
+		}
+
+		// Открываем файл names.txt для записи в конец
+		namesFile, err := os.OpenFile(folder+"/names.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			// Если ошибка при открытии файла, выводим ошибку
+			fmt.Printf("Ошибка при открытии файла names.txt: %v\n", err)
+			return
+		}
+		defer namesFile.Close()
+
+		// Перебираем все URL-ы видео и скачиваем их
+		for i, videoURL := range videoURLs {
+			if videoURL == "" {
+				continue // Пропускаем пустые строки
+			}
+
+			// Получаем название видео с помощью yt-dlp
+			cmdTitle := exec.Command("./yt-dlp.exe", "--get-title", videoURL)
+			titleOutput, err := cmdTitle.CombinedOutput()
 			if err != nil {
-				fmt.Printf("Ошибка при переименовании файла %s: %v\n", oldFilePath, err)
+				// Если ошибка при получении названия видео, выводим ошибку
+				fmt.Printf("Ошибка при получении названия видео %s: %v\n", videoURL, err)
 				continue
 			}
 
-			// Записываем имя в файл
-			namesFileHandle.WriteString(newFileName + "\n")
+			// Убираем возможный лишний пробел или символ новой строки в конце
+			videoTitle := strings.TrimSpace(string(titleOutput))
+
+			// Обновляем метку текущего скачиваемого видео
+			currentNameLabel.SetText(fmt.Sprintf("Скачивание %d из %d: %s", i+1, len(videoURLs), videoTitle))
+
+			// Подготовка аргументов для скачивания
+			args := []string{"-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4"}
+			if mediaType == "Аудио" {
+				// Если выбран тип "Аудио", добавляем аргументы для скачивания только аудио
+				args = []string{"-x", "--audio-format", "mp3", "--audio-quality", "0"}
+			}
+
+			// Добавляем параметры для скачивания в папку
+			args = append(args, "-o", fmt.Sprintf("%s/%%(title)s.%%(ext)s", folder), videoURL)
+
+			// Запуск команды для скачивания
+			cmd := exec.Command("./yt-dlp.exe", args...)
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			if err := cmd.Run(); err != nil {
+				// Если ошибка при скачивании, выводим ошибку
+				fmt.Printf("Ошибка при скачивании %s: %v\n", videoTitle, err)
+			}
+
+			// Добавляем название видео в файл names.txt
+			_, err = fmt.Fprintln(namesFile, videoTitle)
+			if err != nil {
+				// Если ошибка при записи в файл, выводим ошибку
+				fmt.Printf("Ошибка при записи в файл names.txt: %v\n", err)
+			}
 		}
-	}
+
+		// Обновляем метку о завершении скачивания
+		currentNameLabel.SetText("Скачивание завершено!")
+	}()
 }
 
-// Функция для проверки правильности формата даты
+
+
+// isValidDate проверяет корректность даты в формате YYYYMMDD
 func isValidDate(date string) bool {
 	// Проверяем, что дата состоит только из цифр
 	for _, ch := range date {
@@ -156,130 +170,74 @@ func isValidDate(date string) bool {
 	return true
 }
 
-// Функция для извлечения имени канала из URL
+// getFolderNameFromURL извлекает имя папки из URL (например, имя канала)
 func getFolderNameFromURL(url string) string {
-	re := regexp.MustCompile(`@([a-zA-Z0-9]+)`)
+	re := regexp.MustCompile(`@([a-zA-Z0-9_-]+)`)
 	matches := re.FindStringSubmatch(url)
 	if len(matches) > 1 {
-		return matches[1] // Возвращаем имя канала
+		// Возвращаем имя канала или плейлиста из URL
+		return matches[1]
 	}
-	return "default" // Если не удалось извлечь имя, возвращаем default
+	return "default" // Если имя не найдено, возвращаем "default"
 }
 
 func main() {
-	loadConfig()
+	loadConfig() // Загружаем конфигурацию
 
-	// Создаем приложение Fyne
-	a := app.New()
-	w := a.NewWindow("YouTube Downloader")
-	w.Resize(fyne.NewSize(600, 400))
+	a := app.New() // Создаем новое приложение
+	w := a.NewWindow("YouTube Downloader") // Создаем новое окно приложения
+	w.Resize(fyne.NewSize(600, 400)) // Задаем размер окна
 
-	// Поле ввода URL канала
+	// Создаем элементы интерфейса
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder("Введите URL канала")
+	currentNameLabel := widget.NewLabel("Ожидание начала скачивания...")
+	totalLabel := widget.NewLabel("0 / 0")
 
-	// Функция для создания радиогруппы выбора типа медиа
-	createMediaGroup := func(selected string) *widget.RadioGroup {
-		mediaGroup := widget.NewRadioGroup([]string{"Все", "Видео", "Аудио"}, nil)
-		mediaGroup.Horizontal = true
-		mediaGroup.SetSelected(selected) // Устанавливаем начальное значение
-		mediaGroup.OnChanged = func(value string) {
-			config.MediaType = value
-			saveConfig()
-		}
-		return mediaGroup
+	// Группа для выбора типа медиа (Видео или Аудио)
+	mediaGroup := widget.NewRadioGroup([]string{"Видео", "Аудио"}, nil)
+	mediaGroup.Horizontal = true
+	mediaGroup.SetSelected(config.MediaType)
+	mediaGroup.OnChanged = func(value string) {
+		// Сохраняем выбранный тип медиа в конфигурацию
+		config.MediaType = value
+		saveConfig()
 	}
 
-	// Создаем радиогруппу с начальным значением из конфигурации
-	mediaGroup := createMediaGroup(config.MediaType)
+	// Группа для выбора фильтра даты
+	dateGroup := widget.NewRadioGroup([]string{"Все ролики", "Начальная дата"}, nil)
+	dateGroup.Horizontal = true
+	dateGroup.SetSelected(config.DateFilter)
 
-	// Заголовок для выбора типа медиа
-	mediaLabel := widget.NewLabel("Выберите тип медиа:")
-
-	// Поле ввода даты (отображается только при выборе "С даты")
-	dateEntry := widget.NewEntry()
-	dateEntry.SetPlaceHolder("YYYYMMDD")
-	dateEntry.Resize(fyne.NewSize(400, 30)) // Увеличиваем поле ввода
-
-	// Контейнер для поля ввода даты
-	dateContainer := container.NewHBox()
-	if config.DateFilter == "С даты" {
-		dateContainer.Add(dateEntry)
-	}
-
-	// Функция для создания радиогруппы выбора периода
-	createDateGroup := func(selected string, dateContainer *fyne.Container, dateEntry *widget.Entry) *widget.RadioGroup {
-		dateGroup := widget.NewRadioGroup([]string{"Все ролики", "С даты"}, nil)
-		dateGroup.Horizontal = true
-		dateGroup.SetSelected(selected) // Устанавливаем начальное значение
-		dateGroup.OnChanged = func(value string) {
-			config.DateFilter = value
-			dateContainer.Objects = nil
-			if value == "С даты" {
-				dateContainer.Add(dateEntry)
-			}
-			dateContainer.Refresh()
-			saveConfig()
-		}
-		return dateGroup
-	}
-
-	// Создаем радиогруппу с начальным значением из конфигурации
-	dateGroup := createDateGroup(config.DateFilter, dateContainer, dateEntry)
-
-	// Заголовок для выбора периода
-	dateLabel := widget.NewLabel("Выберите период загрузки:")
-
-	// Кнопка для запуска скачивания
-	downloadBtn := widget.NewButton("Скачать", func() {
+	// Кнопка для начала скачивания
+	downloadButton := widget.NewButton("Начать скачивание", func() {
 		url := urlEntry.Text
 		if url == "" {
-			// Если URL не введен, показываем всплывающее сообщение
-			message := widget.NewLabel("Пожалуйста, введите URL")
-			popUp := widget.NewPopUp(container.NewVBox(message), w.Canvas())
-			popUp.Show()
+			// Если URL не указан, выводим ошибку
+			fmt.Println("Ошибка: URL не указан")
 			return
 		}
-
-		// Извлекаем имя папки из URL
+		// Получаем имя папки для скачивания
 		folderName := getFolderNameFromURL(url)
-
-		// Загружаем медиа (видео или аудио)
-		downloadMedia(url, folderName, config.DateFilter, config.MediaType)
+		// Запускаем функцию скачивания
+		downloadMedia(w, url, folderName, "", config.MediaType, currentNameLabel, totalLabel)
 	})
 
-	// Кнопка сохранения настроек
-	saveBtn := widget.NewButton("Сохранить настройки", func() {
-		saveConfig()
-	})
-
-	// Кнопка выхода из программы
-	quitBtn := widget.NewButton("Выход", func() {
-		w.Close()
-	})
-
-	// Контейнеры для групп радиокнопок с заголовками и отступами
-	mediaContainer := container.NewVBox(mediaLabel, mediaGroup)
-	dateSelectionContainer := container.NewVBox(dateLabel, dateGroup, dateContainer)
-
-	// Контейнер с основными элементами
-	mainContainer := container.NewVBox(
+	// Размещаем элементы интерфейса в окне
+	w.SetContent(container.NewVBox(
 		urlEntry,
-		mediaContainer,
-		dateSelectionContainer,
-		downloadBtn,
-	)
+		mediaGroup,
+		dateGroup,
+		downloadButton,
+		currentNameLabel,
+		totalLabel,
+	))
 
-	// Контейнер для кнопок внизу экрана
-	bottomContainer := container.NewHBox(saveBtn, quitBtn)
+	// При закрытии окна завершаем все процессы yt-dlp.exe
+	w.SetOnClosed(func() {
+		terminateProcesses()
+	})
 
-	// Размещение элементов на окне
-	content := container.NewBorder(nil, bottomContainer, nil, nil, mainContainer)
-	w.SetContent(content)
-
-	// Обновление состояния радиокнопок
-	w.Canvas().Refresh(content)
-
-	// Показать и запустить окно
+	// Запускаем приложение
 	w.ShowAndRun()
 }
