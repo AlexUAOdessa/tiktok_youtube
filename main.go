@@ -55,107 +55,110 @@ func terminateProcesses() {
 
 // downloadMedia скачивает медиа файлы с канала по указанному URL
 func downloadMedia(w fyne.Window, url, folderName, dateAfter, mediaType string, currentNameLabel, totalLabel *widget.Label) {
-	go func() {
-		// Папки для хранения видео и аудио
-		videoFolder := folderName + "/video"
-		audioFolder := folderName + "/audio"
-
-		// Создаем папки для хранения файлов
-		os.MkdirAll(videoFolder, os.ModePerm)
-		os.MkdirAll(audioFolder, os.ModePerm)
-
-		// Настройки для команды yt-dlp
-		args := []string{"--flat-playlist", "--print", "url", "--no-cache-dir"} // Получаем список URL-ов видео
-		if dateAfter != "" && dateAfter != "Все ролики" {
-			// Если выбран фильтр по дате, проверяем корректность даты
-			if len(dateAfter) != 8 || !isValidDate(dateAfter) {
-				fmt.Println("Ошибка: неверный формат даты. Ожидается YYYYMMDD.")
-				return
-			}
-			// Добавляем фильтр по дате
-			args = append(args, "--dateafter="+dateAfter)
-		}
-
-		// Выполняем команду для получения списка URL-ов видео
-		cmdList := exec.Command("./yt-dlp.exe", append(args, url)...)
-		output, err := cmdList.CombinedOutput()
-		if err != nil {
-			// Если ошибка при получении списка видео, выводим ее
-			fmt.Printf("Ошибка при получении списка видео %s: %v\n", url, err)
+	// Папки для хранения видео и аудио
+	videoFolder := folderName + "/video"
+	audioFolder := folderName + "/audio"
+	// Создаем папки для хранения файлов
+	os.MkdirAll(videoFolder, os.ModePerm)
+	os.MkdirAll(audioFolder, os.ModePerm)
+	// Настройки для команды yt-dlp
+	args := []string{"--flat-playlist", "--print", "url", "--no-cache-dir"} // Получаем список URL-ов видео
+	if dateAfter != "" && dateAfter != "Все ролики" {
+		// Если выбран фильтр по дате, проверяем корректность даты
+		if len(dateAfter) != 8 || !isValidDate(dateAfter) {
+			fmt.Println("Ошибка: неверный формат даты. Ожидается YYYYMMDD.")
 			return
 		}
-
-		// Разделяем результат выполнения команды на строки (URL-ы видео)
-		videoURLs := strings.Split(string(output), "\n")
-		totalLabel.SetText(fmt.Sprintf("Общее количество: %d", len(videoURLs)))
-
-		// Определяем папку для скачивания (в зависимости от типа медиа)
-		folder := videoFolder
+		// Добавляем фильтр по дате
+		args = append(args, "--dateafter="+dateAfter)
+	}
+	// Выполняем команду для получения списка URL-ов видео
+	cmdList := exec.Command("./yt-dlp.exe", append(args, url)...)
+	output, err := cmdList.CombinedOutput()
+	if err != nil {
+		// Если ошибка при получении списка видео, выводим ее
+		fmt.Printf("Ошибка при получении списка видео %s: %v\n", url, err)
+		return
+	}
+	// Разделяем результат выполнения команды на строки (URL-ы видео)
+	videoURLs := strings.Split(string(output), "\n")
+	totalLabel.SetText(fmt.Sprintf("Общее количество: %d", len(videoURLs)))
+	// Определяем папку для скачивания (в зависимости от типа медиа)
+	folder := videoFolder
+	if mediaType == "Аудио" {
+		folder = audioFolder
+	}
+	// Открываем файл names.txt для записи в конец
+	namesFile, err := os.OpenFile(folder+"/names.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		// Если ошибка при открытии файла, выводим ошибку
+		fmt.Printf("Ошибка при открытии файла names.txt: %v\n", err)
+		return
+	}
+	defer namesFile.Close()
+	// Перебираем все URL-ы видео и скачиваем их
+	saveName := ""
+	for i, videoURL := range videoURLs {
+		if videoURL == "" {
+			continue // Пропускаем пустые строки
+		}
+		// Получаем название видео с помощью yt-dlp
+		cmdTitle := exec.Command("./yt-dlp.exe", "--get-title", videoURL)
+		titleOutput, err := cmdTitle.CombinedOutput()
+		if err != nil {
+			// Если ошибка при получении названия видео, выводим ошибку
+			fmt.Printf("Ошибка при получении названия видео %s: %v\n", videoURL, err)
+			continue
+		}
+		// Убираем возможный лишний пробел или символ новой строки в конце
+		videoTitle := strings.TrimSpace(string(titleOutput))
+		
+		// Проверка, существует ли файл
+		filePath := fmt.Sprintf("%s/%s.mp4", folder, videoTitle) // Путь для видео
 		if mediaType == "Аудио" {
-			folder = audioFolder
+			filePath = fmt.Sprintf("%s/%s.mp3", folder, videoTitle) // Путь для аудио
 		}
 
-		// Открываем файл names.txt для записи в конец
-		namesFile, err := os.OpenFile(folder+"/names.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			// Если ошибка при открытии файла, выводим ошибку
-			fmt.Printf("Ошибка при открытии файла names.txt: %v\n", err)
-			return
+		// Если файл существует, пропускаем его
+		if _, err := os.Stat(filePath); err == nil {
+			fmt.Printf("Файл %s уже существует, пропускаем скачивание.\n", videoTitle)
+			continue
 		}
-		defer namesFile.Close()
 
-		// Перебираем все URL-ы видео и скачиваем их
-		for i, videoURL := range videoURLs {
-			if videoURL == "" {
-				continue // Пропускаем пустые строки
-			}
+		// Обновляем метку текущего скачиваемого видео
+		currentNameLabel.SetText(fmt.Sprintf("Скачивание %d из %d: %s", i+1, len(videoURLs), videoTitle))
 
-			// Получаем название видео с помощью yt-dlp
-			cmdTitle := exec.Command("./yt-dlp.exe", "--get-title", videoURL)
-			titleOutput, err := cmdTitle.CombinedOutput()
-			if err != nil {
-				// Если ошибка при получении названия видео, выводим ошибку
-				fmt.Printf("Ошибка при получении названия видео %s: %v\n", videoURL, err)
-				continue
-			}
+		// Подготовка аргументов для скачивания
+		args := []string{"-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4"}
+		if mediaType == "Аудио" {
+			// Если выбран тип "Аудио", добавляем аргументы для скачивания только аудио
+			args = []string{"-x", "--audio-format", "mp3", "--audio-quality", "0"}
+		}
+		// Добавляем параметры для скачивания в папку
+		args = append(args, "-o", fmt.Sprintf("%s/%%(title)s.%%(ext)s", folder), videoURL)
+		// Запуск команды для скачивания
+		cmd := exec.Command("./yt-dlp.exe", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			// Если ошибка при скачивании, выводим ошибку
+			fmt.Printf("Ошибка при скачивании %s: %v\n", videoTitle, err)
+		}
 
-			// Убираем возможный лишний пробел или символ новой строки в конце
-			videoTitle := strings.TrimSpace(string(titleOutput))
-
-			// Обновляем метку текущего скачиваемого видео
-			currentNameLabel.SetText(fmt.Sprintf("Скачивание %d из %d: %s", i+1, len(videoURLs), videoTitle))
-
-			// Подготовка аргументов для скачивания
-			args := []string{"-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4"}
-			if mediaType == "Аудио" {
-				// Если выбран тип "Аудио", добавляем аргументы для скачивания только аудио
-				args = []string{"-x", "--audio-format", "mp3", "--audio-quality", "0"}
-			}
-
-			// Добавляем параметры для скачивания в папку
-			args = append(args, "-o", fmt.Sprintf("%s/%%(title)s.%%(ext)s", folder), videoURL)
-
-			// Запуск команды для скачивания
-			cmd := exec.Command("./yt-dlp.exe", args...)
-			cmd.Stdout = os.Stdout
-			cmd.Stderr = os.Stderr
-			if err := cmd.Run(); err != nil {
-				// Если ошибка при скачивании, выводим ошибку
-				fmt.Printf("Ошибка при скачивании %s: %v\n", videoTitle, err)
-			}
-
-			// Добавляем название видео в файл names.txt
+		// Добавляем название видео в файл names.txt
+		if saveName != videoTitle {
 			_, err = fmt.Fprintln(namesFile, videoTitle)
 			if err != nil {
 				// Если ошибка при записи в файл, выводим ошибку
 				fmt.Printf("Ошибка при записи в файл names.txt: %v\n", err)
 			}
 		}
-
-		// Обновляем метку о завершении скачивания
-		currentNameLabel.SetText("Скачивание завершено!")
-	}()
+		saveName = videoTitle
+	}
+	// Обновляем метку о завершении скачивания
+	currentNameLabel.SetText("Скачивание завершено!")
 }
+
 
 // isValidDate проверяет корректность даты в формате YYYYMMDD
 func isValidDate(date string) bool {
@@ -178,6 +181,46 @@ func getFolderNameFromURL(url string) string {
 	}
 	return "default" // Если имя не найдено, возвращаем "default"
 }
+
+// // Оставить только уникальные имена в файле
+// func uniqueLines(filePath string) error {
+// 	file, err := os.Open(filePath)
+// 	if err != nil {
+// 		return fmt.Errorf("не удалось открыть файл: %w", err)
+// 	}
+// 	defer file.Close()
+
+// 	unique := make(map[string]bool)
+// 	scanner := bufio.NewScanner(file)
+
+// 	for scanner.Scan() {
+// 		line := strings.TrimSpace(scanner.Text())
+// 		if line != "" {
+// 			unique[line] = true
+// 		}
+// 	}
+
+// 	if err := scanner.Err(); err != nil {
+// 		return fmt.Errorf("ошибка при чтении файла: %w", err)
+// 	}
+
+// 	outputFile, err := os.Create(filePath)
+// 	if err != nil {
+// 		return fmt.Errorf("не удалось создать файл: %w", err)
+// 	}
+// 	defer outputFile.Close()
+
+// 	writer := bufio.NewWriter(outputFile)
+// 	for line := range unique {
+// 		_, err := writer.WriteString(line + "\n")
+// 		if err != nil {
+// 			return fmt.Errorf("ошибка при записи в файл: %w", err)
+// 		}
+// 	}
+// 	writer.Flush()
+
+// 	return nil
+// }
 
 func main() {
 	loadConfig() // Загружаем конфигурацию
@@ -246,6 +289,13 @@ func main() {
 		}
 		// Запускаем функцию скачивания
 		downloadMedia(w, url, folderName, dateAfter, config.MediaType, currentNameLabel, totalLabel)
+
+			// filePath := filepath.Join(folderName, "names.txt")
+	    // if err := uniqueLines(filePath); err != nil {
+	    // 	fmt.Println("Ошибка:", err)
+	    // } else {
+	    // 	fmt.Println("Файл обработан успешно, оставлены только уникальные имена роликов")
+	    // }
 	})
 
 	// Размещаем элементы интерфейса в окне
